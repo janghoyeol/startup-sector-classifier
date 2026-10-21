@@ -1,0 +1,201 @@
+"""한국어 위키백과 공식 API로 두 종류의 데이터를 모은다.
+
+- sector: "분류:대한민국의 기업" 하위 카테고리(업종별)에 속한 회사 문서의 도입부
+  텍스트 + 카테고리명을 라벨로 수집한다 (2단계 미세조정용).
+- pretrain: 무작위 한국어 문서 도입부 텍스트를 수집한다 (1단계 언어모델 사전학습용).
+
+위키백과 API는 봇 차단이 없고 공식적으로 적절한 속도의 익명 사용을 허용한다
+(https://www.mediawiki.org/wiki/API:Etiquette). 그래도 매 요청 사이 delay를 두고
+429를 받으면 Retry-After를 존중해 재시도한다.
+
+사용:
+    python scripts/wiki_scrape.py sector --limit 500 --out data/raw/sector.jsonl
+    python scripts/wiki_scrape.py pretrain --limit 2000 --out data/raw/pretrain.jsonl
+"""
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+import requests
+from tqdm import tqdm
+
+API = "https://ko.wikipedia.org/w/api.php"
+USER_AGENT = (
+    "startup-sector-classifier/0.1 "
+    "(portfolio research project; contact: janghoyeol1@gmail.com)"
+)
+ROOT_CATEGORY = "분류:대한민국의 기업"
+
+
+def call(session: requests.Session, params: dict, delay: float) -> dict:
+    params = {**params, "format": "json"}
+    for attempt in range(5):
+        resp = session.get(API, params=params, timeout=20)
+        if resp.status_code == 429:
+            wait = float(resp.headers.get("Retry-After", 10 * (attempt + 1)))
+            print(f"429, {wait}s 대기...", file=sys.stderr)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        time.sleep(delay)
+        return resp.json()
+    raise RuntimeError("반복적으로 429를 받아 중단합니다")
+
+
+def list_category_members(
+    session: requests.Session, category: str, cmtype: str, delay: float
+) -> list[str]:
+    titles: list[str] = []
+    cmcontinue = None
+    while True:
+        params = {
+            "action": "query",
+            "list": "categorymembers",
+            "cmtitle": category,
+            "cmtype": cmtype,
+            "cmlimit": "500",
+        }
+        if cmcontinue:
+            params["cmcontinue"] = cmcontinue
+        data = call(session, params, delay)
+        members = data.get("query", {}).get("categorymembers", [])
+        titles.extend(m["title"] for m in members)
+        cmcontinue = data.get("continue", {}).get("cmcontinue")
+        if not cmcontinue:
+            break
+    return titles
+
+
+def fetch_intro(session: requests.Session, title: str, delay: float) -> str | None:
+    data = call(
+        session,
+        {
+            "action": "query",
+            "prop": "extracts",
+            "exintro": "1",
+            "explaintext": "1",
+            "titles": title,
+        },
+        delay,
+    )
+    pages = data.get("query", {}).get("pages", {})
+    for page in pages.values():
+        text = page.get("extract", "").strip()
+        if text:
+            return text
+    return None
+
+
+def already_done(out_path: Path, key: str = "title") -> set[str]:
+    if not out_path.exists():
+        return set()
+    seen = set()
+    with out_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                seen.add(json.loads(line)[key])
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return seen
+
+
+def cmd_sector(args: argparse.Namespace) -> None:
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
+
+    print("하위 카테고리(업종) 목록 수집 중...", file=sys.stderr)
+    subcats = list_category_members(session, ROOT_CATEGORY, "subcat", args.delay)
+    print(f"업종 카테고리 수: {len(subcats)}", file=sys.stderr)
+
+    seen = already_done(args.out)
+    print(f"이미 수집됨: {len(seen)}개, 건너뜀", file=sys.stderr)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    collected = 0
+    with args.out.open("a", encoding="utf-8") as f:
+        for category in tqdm(subcats, desc="categories"):
+            if collected >= args.limit:
+                break
+            pages = list_category_members(session, category, "page", args.delay)
+            label = category.removeprefix("분류:")
+            for title in pages:
+                if collected >= args.limit:
+                    break
+                if title in seen:
+                    continue
+                text = fetch_intro(session, title, args.delay)
+                if not text:
+                    continue
+                f.write(
+                    json.dumps({"title": title, "category": label, "text": text}, ensure_ascii=False)
+                    + "\n"
+                )
+                f.flush()
+                seen.add(title)
+                collected += 1
+
+
+def cmd_pretrain(args: argparse.Namespace) -> None:
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
+
+    seen = already_done(args.out)
+    print(f"이미 수집됨: {len(seen)}개, 건너뜀", file=sys.stderr)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    collected = 0
+    with args.out.open("a", encoding="utf-8") as f, tqdm(total=args.limit, desc="pretrain") as pbar:
+        pbar.update(len(seen))
+        while collected < args.limit:
+            data = call(
+                session,
+                {
+                    "action": "query",
+                    "list": "random",
+                    "rnnamespace": "0",
+                    "rnlimit": "20",
+                },
+                args.delay,
+            )
+            for item in data.get("query", {}).get("random", []):
+                title = item["title"]
+                if title in seen or collected >= args.limit:
+                    continue
+                text = fetch_intro(session, title, args.delay)
+                if not text or len(text) < 200:
+                    continue
+                f.write(json.dumps({"title": title, "text": text}, ensure_ascii=False) + "\n")
+                f.flush()
+                seen.add(title)
+                collected += 1
+                pbar.update(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    p_sector = sub.add_parser("sector", help="업종 라벨 포함 회사 문서 수집")
+    p_sector.add_argument("--limit", type=int, default=500)
+    p_sector.add_argument("--out", type=Path, default=Path("data/raw/sector.jsonl"))
+    p_sector.add_argument("--delay", type=float, default=1.0)
+    p_sector.set_defaults(func=cmd_sector)
+
+    p_pretrain = sub.add_parser("pretrain", help="사전학습용 무작위 문서 수집")
+    p_pretrain.add_argument("--limit", type=int, default=2000)
+    p_pretrain.add_argument("--out", type=Path, default=Path("data/raw/pretrain.jsonl"))
+    p_pretrain.add_argument("--delay", type=float, default=1.0)
+    p_pretrain.set_defaults(func=cmd_pretrain)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
