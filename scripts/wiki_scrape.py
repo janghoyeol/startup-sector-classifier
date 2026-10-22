@@ -117,13 +117,16 @@ def cmd_sector(args: argparse.Namespace) -> None:
     print(f"이미 수집됨: {len(seen)}개, 건너뜀", file=sys.stderr)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    collected = 0
-    with args.out.open("a", encoding="utf-8") as f:
-        for category in tqdm(subcats, desc="categories"):
+    collected = len(seen)
+    with args.out.open("a", encoding="utf-8") as f, tqdm(
+        total=args.limit, initial=collected, desc="회사 문서 수집"
+    ) as pbar:
+        for category in subcats:
             if collected >= args.limit:
                 break
-            pages = list_category_members(session, category, "page", args.delay)
             label = category.removeprefix("분류:")
+            pbar.set_postfix_str(label[:20])
+            pages = list_category_members(session, category, "page", args.delay)
             for title in pages:
                 if collected >= args.limit:
                     break
@@ -139,6 +142,7 @@ def cmd_sector(args: argparse.Namespace) -> None:
                 f.flush()
                 seen.add(title)
                 collected += 1
+                pbar.update(1)
 
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
