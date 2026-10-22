@@ -1,8 +1,10 @@
-"""한국어 위키백과 공식 API로 두 종류의 데이터를 모은다.
+"""한국어 위키백과 공식 API로 2단계 미세조정용 라벨 데이터를 모은다.
 
-- sector: "분류:대한민국의 기업" 하위 카테고리(업종별)에 속한 회사 문서의 도입부
-  텍스트 + 카테고리명을 라벨로 수집한다 (2단계 미세조정용).
-- pretrain: 무작위 한국어 문서 도입부 텍스트를 수집한다 (1단계 언어모델 사전학습용).
+"분류:대한민국의 기업" 하위 카테고리(업종별)에 속한 회사 문서의 도입부 텍스트 +
+카테고리명을 라벨로 수집한다.
+
+(1단계 언어모델 사전학습용 대용량 텍스트는 API 건별 수집으로는 규모가 턱없이
+부족해서 build_pretrain_corpus.py로 분리했다 — 위키백과 전체 덤프를 받아 쓴다.)
 
 위키백과 API는 봇 차단이 없고 공식적으로 적절한 속도의 익명 사용을 허용한다
 (https://www.mediawiki.org/wiki/API:Etiquette). 그래도 매 요청 사이 delay를 두고
@@ -10,7 +12,6 @@
 
 사용:
     python scripts/wiki_scrape.py sector --limit 500 --out data/raw/sector.jsonl
-    python scripts/wiki_scrape.py pretrain --limit 2000 --out data/raw/pretrain.jsonl
 """
 
 import argparse
@@ -145,42 +146,6 @@ def cmd_sector(args: argparse.Namespace) -> None:
                 pbar.update(1)
 
 
-def cmd_pretrain(args: argparse.Namespace) -> None:
-    session = requests.Session()
-    session.headers.update({"User-Agent": USER_AGENT})
-
-    seen = already_done(args.out)
-    print(f"이미 수집됨: {len(seen)}개, 건너뜀", file=sys.stderr)
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    collected = 0
-    with args.out.open("a", encoding="utf-8") as f, tqdm(total=args.limit, desc="pretrain") as pbar:
-        pbar.update(len(seen))
-        while collected < args.limit:
-            data = call(
-                session,
-                {
-                    "action": "query",
-                    "list": "random",
-                    "rnnamespace": "0",
-                    "rnlimit": "20",
-                },
-                args.delay,
-            )
-            for item in data.get("query", {}).get("random", []):
-                title = item["title"]
-                if title in seen or collected >= args.limit:
-                    continue
-                text = fetch_intro(session, title, args.delay)
-                if not text or len(text) < 200:
-                    continue
-                f.write(json.dumps({"title": title, "text": text}, ensure_ascii=False) + "\n")
-                f.flush()
-                seen.add(title)
-                collected += 1
-                pbar.update(1)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -190,12 +155,6 @@ def main() -> None:
     p_sector.add_argument("--out", type=Path, default=Path("data/raw/sector.jsonl"))
     p_sector.add_argument("--delay", type=float, default=1.0)
     p_sector.set_defaults(func=cmd_sector)
-
-    p_pretrain = sub.add_parser("pretrain", help="사전학습용 무작위 문서 수집")
-    p_pretrain.add_argument("--limit", type=int, default=2000)
-    p_pretrain.add_argument("--out", type=Path, default=Path("data/raw/pretrain.jsonl"))
-    p_pretrain.add_argument("--delay", type=float, default=1.0)
-    p_pretrain.set_defaults(func=cmd_pretrain)
 
     args = parser.parse_args()
     args.func(args)
