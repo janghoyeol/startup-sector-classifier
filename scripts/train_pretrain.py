@@ -128,9 +128,14 @@ def main() -> None:
                 f"val_loss {val_loss:.4f}  ({elapsed:.0f}s)",
                 file=sys.stderr,
             )
+            # 세션이 중간에 끊겨도(Kaggle idle disconnect 등) 최신 진행 상황을 건질 수 있도록
+            # 매 평가 시점마다 같은 경로에 체크포인트를 덮어쓴다.
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {"model_state": model.state_dict(), "config": config, "step": step},
+                args.out,
+            )
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model_state": model.state_dict(), "config": config}, args.out)
     print(f"체크포인트 저장: {args.out}", file=sys.stderr)
 
 
