@@ -28,6 +28,10 @@ from pathlib import Path
 import requests
 
 DUMP_URL = "https://dumps.wikimedia.org/kowiki/latest/kowiki-latest-pages-articles.xml.bz2"
+USER_AGENT = (
+    "startup-sector-classifier/0.1 "
+    "(portfolio research project; contact: janghoyeol1@gmail.com)"
+)
 
 
 def download_dump(dest: Path) -> None:
@@ -36,7 +40,8 @@ def download_dump(dest: Path) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"덤프 다운로드 중... ({DUMP_URL})", file=sys.stderr)
-    with requests.get(DUMP_URL, stream=True, timeout=60) as r:
+    headers = {"User-Agent": USER_AGENT}
+    with requests.get(DUMP_URL, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0))
         done = 0
