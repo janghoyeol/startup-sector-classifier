@@ -127,12 +127,24 @@ def cmd_sector(args: argparse.Namespace) -> None:
     print("카테고리별 문서 목록 수집 중...", file=sys.stderr)
     rng = random.Random(args.seed)
     queues: dict[str, list[str]] = {}
+    skipped = []
     for category in subcats:
         pages = list_category_members(session, category, "page", args.delay)
-        rng.shuffle(pages)
         label = category.removeprefix("분류:")
+        if len(pages) < args.min_category_size:
+            skipped.append((label, len(pages)))
+            continue
+        rng.shuffle(pages)
         queues[label] = pages
         print(f"  {label}: {len(pages)}개", file=sys.stderr)
+
+    if skipped:
+        print(
+            f"문서 {args.min_category_size}개 미만이라 라벨에서 제외: "
+            + ", ".join(f"{label}({n})" for label, n in skipped),
+            file=sys.stderr,
+        )
+    print(f"최종 라벨(업종) 수: {len(queues)}", file=sys.stderr)
 
     per_category_cap = args.per_category_cap or max(1, -(-args.limit // max(1, len(queues))))
     print(f"카테고리당 최대 {per_category_cap}개까지 균형 있게 수집", file=sys.stderr)
@@ -193,6 +205,12 @@ def main() -> None:
         type=int,
         default=None,
         help="카테고리당 최대 수집 개수 (기본값: limit을 카테고리 수로 나눠서 자동 계산)",
+    )
+    p_sector.add_argument(
+        "--min-category-size",
+        type=int,
+        default=10,
+        help="위키백과 문서가 이보다 적은 카테고리는 라벨로 쓰기엔 너무 희소해 제외 (기본 10)",
     )
     p_sector.set_defaults(func=cmd_sector)
 
