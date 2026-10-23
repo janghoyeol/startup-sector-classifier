@@ -1,6 +1,6 @@
 """한국어 위키백과 공식 API로 2단계 미세조정용 라벨 데이터를 모은다.
 
-"분류:대한민국의 기업" 하위 카테고리(업종별)에 속한 회사 문서의 도입부 텍스트 +
+"분류:대한민국의 업종별 기업" 하위 카테고리(업종별)에 속한 회사 문서의 도입부 텍스트 +
 카테고리명을 라벨로 수집한다.
 
 (1단계 언어모델 사전학습용 대용량 텍스트는 API 건별 수집으로는 규모가 턱없이
@@ -28,7 +28,7 @@ USER_AGENT = (
     "startup-sector-classifier/0.1 "
     "(portfolio research project; contact: janghoyeol1@gmail.com)"
 )
-ROOT_CATEGORY = "분류:대한민국의 기업"
+ROOT_CATEGORY = "분류:대한민국의 업종별 기업"
 
 
 def call(session: requests.Session, params: dict, delay: float) -> dict:
