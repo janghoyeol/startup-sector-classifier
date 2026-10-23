@@ -154,3 +154,61 @@ class GPT(nn.Module):
             next_id = torch.multinomial(probs, num_samples=1)
             idx = torch.cat([idx, next_id], dim=1)
         return idx
+
+
+class GPTClassifier(nn.Module):
+    """1단계에서 사전학습한 GPT 백본 위에 분류 head를 얹은 모델 (2단계 미세조정용).
+
+    필드 이름(tok_emb/pos_emb/drop/blocks/ln_f)을 `GPT`와 똑같이 맞춰뒀다 — 그래야
+    1단계가 저장한 체크포인트의 state_dict를 `strict=False`로 그대로 얹을 수 있다.
+    출력층만 모양이 다르므로(vocab_size 대신 num_classes) 자동으로 빠지고 새로
+    랜덤 초기화된 채 남는다. 사전학습을 안 쓰고 싶으면 그냥 `load_pretrained_backbone`을
+    안 부르면 되고, 그러면 이 클래스 전체가 랜덤 초기화부터 시작한다 — 두 경우를
+    같은 코드·같은 구조로 비교할 수 있게 하려는 설계다.
+    """
+
+    def __init__(self, config: GPTConfig, num_classes: int):
+        super().__init__()
+        self.config = config
+        self.num_classes = num_classes
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        self.pos_emb = nn.Embedding(config.block_size, config.n_embd)
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.classifier = nn.Linear(config.n_embd, num_classes)
+        self.apply(GPT._init_weights)
+
+    def num_params(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+
+    def load_pretrained_backbone(self, checkpoint_path, device: str = "cpu") -> dict:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        missing, unexpected = self.load_state_dict(ckpt["model_state"], strict=False)
+        return {"missing": missing, "unexpected": unexpected}
+
+    def forward(
+        self,
+        idx: torch.Tensor,
+        lengths: torch.Tensor,
+        targets: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        B, T = idx.shape
+        assert T <= self.config.block_size, "입력 길이가 block_size를 넘었습니다"
+        pos = torch.arange(T, device=idx.device)
+        x = self.drop(self.tok_emb(idx) + self.pos_emb(pos)[None, :, :])
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln_f(x)
+
+        # 각 예제에서 "마지막 실제 토큰" 위치의 hidden state를 뽑아 분류에 쓴다.
+        # causal(단방향) attention이라, 그 뒤에 붙는 패딩 토큰이 이 표현에 영향을
+        # 주지 않는다 — 별도의 padding mask 없이도 안전하다.
+        last_idx = (lengths - 1).clamp(min=0)
+        pooled = x[torch.arange(B, device=idx.device), last_idx]
+        logits = self.classifier(pooled)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits, targets)
+        return logits, loss
