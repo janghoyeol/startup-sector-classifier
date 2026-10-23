@@ -117,7 +117,15 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=3e-4, help="분류 head 학습률")
+    parser.add_argument(
+        "--backbone-lr",
+        type=float,
+        default=None,
+        help="백본(tok_emb/pos_emb/blocks/ln_f) 학습률. "
+        "--pretrained를 줬으면 기본값 lr/10 (사전학습 지식이 금방 덮어써지는 걸 방지), "
+        "--pretrained 없으면 기본값 lr(=분류 head와 동일, 보호할 사전지식이 없으므로)",
+    )
     parser.add_argument("--val-fraction", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -148,7 +156,17 @@ def main() -> None:
                 f"--vocab의 vocab_size({tokenizer.vocab_size})가 다릅니다 — "
                 "1단계와 같은 vocab.json을 써야 합니다."
             )
-        config = ckpt_config  # 백본 모양을 체크포인트에 맞춤
+        # 가중치 모양을 결정하는 필드만 체크포인트 걸 따르고, dropout처럼 모양과
+        # 무관한 하이퍼파라미터는 이번 실행의 --dropout 값을 그대로 쓴다
+        # (체크포인트 config를 통째로 덮어쓰면 --dropout이 조용히 무시됐었음).
+        config = GPTConfig(
+            vocab_size=ckpt_config.vocab_size,
+            block_size=ckpt_config.block_size,
+            n_layer=ckpt_config.n_layer,
+            n_head=ckpt_config.n_head,
+            n_embd=ckpt_config.n_embd,
+            dropout=args.dropout,
+        )
 
     if args.max_len > config.block_size:
         print(
@@ -172,7 +190,22 @@ def main() -> None:
 
     print(f"모델 파라미터 수: {model.num_params():,} (device={args.device})", file=sys.stderr)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    if args.backbone_lr is not None:
+        backbone_lr = args.backbone_lr
+    elif args.pretrained:
+        backbone_lr = args.lr / 10  # 사전학습 지식이 몇 epoch 안에 덮어써지지 않도록 천천히
+    else:
+        backbone_lr = args.lr  # 보호할 사전지식이 없으니 head와 같은 속도로 학습
+
+    head_params = list(model.classifier.parameters())
+    backbone_params = [p for n, p in model.named_parameters() if not n.startswith("classifier.")]
+    print(f"학습률: head={args.lr} backbone={backbone_lr}", file=sys.stderr)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": backbone_params, "lr": backbone_lr},
+            {"params": head_params, "lr": args.lr},
+        ]
+    )
     rng = random.Random(args.seed)
 
     best_val_acc = -1.0
