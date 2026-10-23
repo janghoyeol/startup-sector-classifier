@@ -107,6 +107,8 @@ def already_done(out_path: Path, key: str = "title") -> set[str]:
 
 
 def cmd_sector(args: argparse.Namespace) -> None:
+    import random
+
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
 
@@ -117,33 +119,64 @@ def cmd_sector(args: argparse.Namespace) -> None:
     seen = already_done(args.out)
     print(f"이미 수집됨: {len(seen)}개, 건너뜀", file=sys.stderr)
 
+    # 카테고리별 소속 문서 목록을 먼저 다 모아둔다 (아직 본문은 안 가져옴 — 가벼움).
+    # 한 카테고리를 다 소진한 뒤에야 다음 카테고리로 넘어가면, 앞쪽 카테고리 하나가
+    # 문서가 많을 경우 --limit을 혼자 다 채워버려서 다른 업종이 하나도 안 들어갈 수
+    # 있다(실제로 그랬다 — 21개 카테고리인데 4개만 나왔음). 그래서 카테고리별로
+    # 큐를 만들어두고 한 바퀴씩 돌아가며(round-robin) 하나씩 뽑는다.
+    print("카테고리별 문서 목록 수집 중...", file=sys.stderr)
+    rng = random.Random(args.seed)
+    queues: dict[str, list[str]] = {}
+    for category in subcats:
+        pages = list_category_members(session, category, "page", args.delay)
+        rng.shuffle(pages)
+        label = category.removeprefix("분류:")
+        queues[label] = pages
+        print(f"  {label}: {len(pages)}개", file=sys.stderr)
+
+    per_category_cap = args.per_category_cap or max(1, -(-args.limit // max(1, len(queues))))
+    print(f"카테고리당 최대 {per_category_cap}개까지 균형 있게 수집", file=sys.stderr)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     collected = len(seen)
+    per_category_count: dict[str, int] = {label: 0 for label in queues}
+    labels_cycle = [label for label in queues if queues[label]]
+
     with args.out.open("a", encoding="utf-8") as f, tqdm(
         total=args.limit, initial=collected, desc="회사 문서 수집"
     ) as pbar:
-        for category in subcats:
-            if collected >= args.limit:
-                break
-            label = category.removeprefix("분류:")
-            pbar.set_postfix_str(label[:20])
-            pages = list_category_members(session, category, "page", args.delay)
-            for title in pages:
+        while collected < args.limit and labels_cycle:
+            next_cycle = []
+            for label in labels_cycle:
                 if collected >= args.limit:
                     break
+                queue = queues[label]
+                if per_category_count[label] >= per_category_cap or not queue:
+                    continue
+                pbar.set_postfix_str(label[:20])
+                title = queue.pop()
                 if title in seen:
+                    next_cycle.append(label)
                     continue
                 text = fetch_intro(session, title, args.delay)
-                if not text:
-                    continue
-                f.write(
-                    json.dumps({"title": title, "category": label, "text": text}, ensure_ascii=False)
-                    + "\n"
-                )
-                f.flush()
-                seen.add(title)
-                collected += 1
-                pbar.update(1)
+                if text:
+                    f.write(
+                        json.dumps({"title": title, "category": label, "text": text}, ensure_ascii=False)
+                        + "\n"
+                    )
+                    f.flush()
+                    seen.add(title)
+                    collected += 1
+                    per_category_count[label] += 1
+                    pbar.update(1)
+                if queue and per_category_count[label] < per_category_cap:
+                    next_cycle.append(label)
+            labels_cycle = next_cycle
+
+    print("업종별 최종 수집 개수:", file=sys.stderr)
+    for label, n in sorted(per_category_count.items(), key=lambda kv: -kv[1]):
+        if n:
+            print(f"  {label}: {n}", file=sys.stderr)
 
 
 def main() -> None:
@@ -154,6 +187,13 @@ def main() -> None:
     p_sector.add_argument("--limit", type=int, default=500)
     p_sector.add_argument("--out", type=Path, default=Path("data/raw/sector.jsonl"))
     p_sector.add_argument("--delay", type=float, default=1.0)
+    p_sector.add_argument("--seed", type=int, default=42)
+    p_sector.add_argument(
+        "--per-category-cap",
+        type=int,
+        default=None,
+        help="카테고리당 최대 수집 개수 (기본값: limit을 카테고리 수로 나눠서 자동 계산)",
+    )
     p_sector.set_defaults(func=cmd_sector)
 
     args = parser.parse_args()
