@@ -1,0 +1,10 @@
+.git
+data/
+docs/
+tests/
+checkpoints/
+artifacts/
+__pycache__/
+*.pyc
+.venv/
+.claude/

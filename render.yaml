@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: startup-sector-classifier
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: SECTOR_MODEL_HF_REPO
+        value: janghoyeol/startup-sector-classifier

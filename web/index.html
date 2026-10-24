@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>startup-sector-classifier</title>
+<meta name="description" content="토크나이저부터 모델까지 처음부터 설계·학습한 소형 GPT로 회사 소개글의 산업분야를 예측합니다.">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>산업분야 분류기</h1>
+  <p class="subtitle">
+    회사 소개글을 입력하면, <strong>처음부터 설계한</strong> 자모 단위 토크나이저 +
+    소형 GPT(1,180만 파라미터)가 위키백과 한국어 텍스트로 사전학습한 뒤
+    미세조정되어 산업분야를 예측합니다. 외부 사전학습 모델(BERT, GPT 등)은
+    전혀 쓰지 않았습니다.
+  </p>
+
+  <form id="ask-form">
+    <textarea id="text" maxlength="2000" rows="5"
+      placeholder="예) 주식회사 OOO은 2015년에 설립된 소프트웨어 개발 기업으로, 클라우드 기반 재고관리 솔루션을 주요 제품으로 한다."></textarea>
+    <button type="submit">업종 예측</button>
+  </form>
+
+  <div id="status" class="hint"></div>
+
+  <section id="result" hidden>
+    <h2>예측 결과</h2>
+    <div id="top-pick"></div>
+    <ol id="ranking"></ol>
+  </section>
+
+  <section class="about">
+    <h2>이 모델에 대해</h2>
+    <ul>
+      <li>사전학습(언어모델링) → 미세조정(산업분야 분류) 2단계로 직접 학습</li>
+      <li>같은 구조를 사전학습 없이 학습시킨 비교군 대비 검증 정확도 <strong>34.9% vs 23.4%</strong>
+        (21개 업종, 무작위 추측 기준선 4.8%) — 사전학습 효과를 수치로 확인</li>
+      <li>업종 라벨은 한국어 위키백과 카테고리 체계를 그대로 썼습니다 —
+        회사 하나가 업종 여러 개에 걸치는 경우 라벨이 임의로 하나만 배정될 수 있고,
+        학습 데이터가 업종당 평균 수십 개뿐이라 예측이 자주 틀릴 수 있습니다.
+        포트폴리오용 실험 프로젝트이니 참고용으로만 봐주세요.</li>
+    </ul>
+    <p><a href="https://github.com/janghoyeol/startup-sector-classifier" target="_blank" rel="noopener">GitHub에서 설계 과정 보기 (ADR 포함)</a></p>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
