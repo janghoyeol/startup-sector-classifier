@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from model import GPTClassifier  # noqa: E402
 from tokenizer import JamoTokenizer  # noqa: E402
 
-HF_REPO_ENV = "SECTOR_MODEL_HF_REPO"  # 예: "janghoyeol/startup-sector-classifier"
+HF_REPO_ENV = "SECTOR_MODEL_HF_REPO"  # 예: "snowcrab345/startup-sector-classifier"
 
 
 def _ensure_local(path: Path, hf_filename: str) -> Path:
